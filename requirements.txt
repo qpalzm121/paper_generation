@@ -1,0 +1,11 @@
+pandas
+tqdm
+sentence_transformers
+torch==1.13.1 torchvision==0.14.1 torchaudio=0.13.1 -f https://download.pytorch.org/whl/torch_stable.html
+chromadb
+numpy
+gym
+stable_baselines3
+sentence_transformers
+chroma-migrate
+spicy
