@@ -1,14 +1,11 @@
 import gym
 import torch
 import torch.nn as nn
-from stable_baselines3 import DQN
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3 import PPO
-import random
 import numpy as np
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
-from scipy.spatial.distance import cosine
 from tqdm import tqdm
 import chromadb
 from numpy import dot
@@ -54,8 +51,10 @@ def calculate_structure_similarity(vector_list, new_vector):
     return total_similarity-1
 
 def calculate_question_similarity(question1, question2):
+    #if norm(question1) == 0 or norm(question2) == 0:
+    #    return 0
     cos_sim = dot(question1, question2)/(norm(question1)*norm(question2))
-    return cos_sim
+    return cos_sim*3
 
 
 class CustomNetwork(BaseFeaturesExtractor):
@@ -80,8 +79,9 @@ class PaperGenerationEnv(gym.Env):
         self.collection = collection
         self.state = None
         self.states = []
-        self.metadata = []
+        #self.metadata = []
         self.metadata_list = []
+        self.actions = []
         self.ids = None
         self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(768,))
         self.action_space = gym.spaces.Box(low=-2, high=2, shape=(768,))
@@ -89,14 +89,15 @@ class PaperGenerationEnv(gym.Env):
 
 
     def step(self, action):
-        predicted_feature = extract_features(self.state)
+        predicted_feature = extract_features(self.ids)
         action = action.tolist()
         result = self.collection.query(query_embeddings=[action], n_results=1)
         self.ids.append(result['ids'][0][0])
         self.state = predicted_feature
         self.states.append(predicted_feature)
+        self.actions.append(action)
         question = result['metadatas'][0][0]
-        self.metadata.append(question)
+        #self.metadata.append(question)
         difficult = float(question['difficult'])*2
         kpointid = float(question['kpointid'])/10000
         typecode = float(question['typecode'])/5
@@ -110,18 +111,33 @@ class PaperGenerationEnv(gym.Env):
         initial_result = self.collection.query(query_embeddings=[random_embedding], n_results=1)
         self.state = random_embedding
         self.states.append(self.state)
-        self.metadata = [initial_result['metadatas']]
+        #self.metadata = [initial_result['metadatas']]
         question = initial_result['metadatas'][0][0]
         difficult = question['difficult']
         kpointid = question['kpointid']
         typecode = question['typecode']
         self.metadata_list.append([difficult, kpointid, typecode])
         self.ids = [initial_result['ids'][0][0]]
+        self.actions.append(self.state)
         return self.state
 
+    def get_vector_from_id(self, id):
+        em_file = f'./embedding/em_{subject}_{grade}.tsv'
+        with open(em_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        for line in lines:
+            parts = line.split('\t')
+            if parts[0] == id:
+                vector = [float(part) for part in parts[1:]]
+                return vector
+        #如果有意外返回全是1的768维度向量避免出现问题，我的测试中没有出现意外。
+        return [1.0]*768
+
     def calculate_reward(self, action):
-        result = self.collection.query(query_embeddings=[self.state], n_results=1)
-        similarity = result['distances'][0][0]/1000
+        result = self.collection.query(query_embeddings=[action], n_results=1)
+        result_id = result['ids'][0][0]
+        result_vector = self.get_vector_from_id(result_id)
+        similarity = calculate_question_similarity(self.state, result_vector)
         penalty = calculate_structure_similarity(self.metadata_list, self.metadata_list[-1])
         total_reward = similarity - penalty
         return total_reward
